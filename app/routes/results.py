@@ -27,7 +27,6 @@ class GameResultOut(BaseModel):
     puzzle_type: str
     score: int
     duration_sec: int
-    played_at: datetime
 
 
 # ---------- ENDPOINTY ----------
@@ -128,7 +127,6 @@ def get_latest_results(
             puzzle_type=r[3],
             score=r[4],
             duration_sec=r[5],
-            played_at=r[6],
         )
         for r in rows
     ]
