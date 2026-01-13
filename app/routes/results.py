@@ -1,21 +1,31 @@
+# app/routes/results.py
+
 from datetime import datetime, timezone
 from typing import Optional
 
-
 from fastapi import APIRouter, Header, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, confloat, conint
 
 from ..db import db_conn, touch_session
 
 router = APIRouter(tags=["results"])
 
+
 class GameResultIn(BaseModel):
     book_id: int
     extract_id: int
     puzzle_type: str = Field(min_length=1)
+
     score: int = 0
     duration_sec: int = 0
+
+    # NEW
+    mistakes: conint(ge=0) = 0
+    # accuracy as fraction 0.0–1.0 (e.g. 0.92 = 92%)
+    accuracy: confloat(ge=0.0, le=1.0) = 1.0
+
     played_at: Optional[datetime] = None
+
 
 @router.post("/results")
 def save_result(
@@ -28,6 +38,7 @@ def save_result(
     played_at = payload.played_at or datetime.now(timezone.utc)
 
     with db_conn() as conn:
+        # update last_activity_at for this session (and/or validate session exists)
         touch_session(conn, x_session_id)
 
         with conn.cursor() as cur:
@@ -35,9 +46,11 @@ def save_result(
                 """
                 INSERT INTO game_result (
                     session_id, book_id, extract_id,
-                    puzzle_type, score, duration_sec, played_at
+                    puzzle_type, score, duration_sec,
+                    mistakes, accuracy,
+                    played_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING result_id
                 """,
                 (
@@ -47,6 +60,8 @@ def save_result(
                     payload.puzzle_type,
                     payload.score,
                     payload.duration_sec,
+                    payload.mistakes,
+                    payload.accuracy,
                     played_at,
                 ),
             )
