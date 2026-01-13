@@ -13,15 +13,13 @@ router = APIRouter(tags=["results"])
 
 class GameResultIn(BaseModel):
     book_id: int
-    extract_id: int
-    puzzle_type: str = Field(min_length=1)
+    extract_no: int  # <-- TO przychodzi z frontu (1,2,3...) w ramach book_id
 
+    puzzle_type: str = Field(min_length=1)
     score: int = 0
     duration_sec: int = 0
 
-    # NEW
     mistakes: conint(ge=0) = 0
-    # accuracy as fraction 0.0–1.0 (e.g. 0.92 = 92%)
     accuracy: confloat(ge=0.0, le=1.0) = 1.0
 
     played_at: Optional[datetime] = None
@@ -38,10 +36,28 @@ def save_result(
     played_at = payload.played_at or datetime.now(timezone.utc)
 
     with db_conn() as conn:
-        # update last_activity_at for this session (and/or validate session exists)
+        # podbij last_activity_at i upewnij się, że sesja istnieje
         touch_session(conn, x_session_id)
 
         with conn.cursor() as cur:
+            # 1) mapowanie (book_id, extract_no) -> extract_id
+            cur.execute(
+                """
+                SELECT extract_id
+                FROM extract
+                WHERE book_id = %s AND extract_no = %s
+                """,
+                (payload.book_id, payload.extract_no),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid extract_no for this book_id",
+                )
+            extract_id = row[0]
+
+            # 2) zapis wyniku
             cur.execute(
                 """
                 INSERT INTO game_result (
@@ -56,7 +72,7 @@ def save_result(
                 (
                     x_session_id,
                     payload.book_id,
-                    payload.extract_id,
+                    extract_id,
                     payload.puzzle_type,
                     payload.score,
                     payload.duration_sec,
@@ -69,4 +85,4 @@ def save_result(
 
         conn.commit()
 
-    return {"ok": True, "result_id": result_id}
+    return {"ok": True, "result_id": result_id, "extract_id": extract_id}
