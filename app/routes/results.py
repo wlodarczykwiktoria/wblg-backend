@@ -1,9 +1,9 @@
 # app/routes/results.py
 
 from datetime import datetime, timezone
-from typing import Optional, List
+from typing import Optional
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel, Field, confloat, conint
 
 from ..db import db_conn, touch_session
@@ -35,10 +35,6 @@ class ResultsSummaryOut(BaseModel):
     avg_accuracy: float
     avg_duration_sec: float
     most_played_puzzle_type: Optional[str] = None
-
-
-class ResultsSummaryAllOut(BaseModel):
-    books: List[ResultsSummaryOut]
 
 
 # =========================
@@ -117,11 +113,11 @@ def save_result(
 
 # =========================
 # GET /results/summary
-# (zmienione: zwraca listę podsumowań dla wszystkich książek)
 # =========================
 
-@router.get("/results/summary", response_model=ResultsSummaryAllOut)
+@router.get("/results/summary", response_model=ResultsSummaryOut)
 def results_summary(
+    book_id: int = Query(..., ge=1),
     x_session_id: Optional[str] = Header(default=None, alias="X-Session-Id"),
 ):
     if not x_session_id:
@@ -135,61 +131,38 @@ def results_summary(
                 """
                 WITH base AS (
                     SELECT
-                        book_id,
                         extract_id,
                         puzzle_type,
                         duration_sec,
                         accuracy
                     FROM public.game_result
                     WHERE session_id = %s
-                ),
-                agg AS (
-                    SELECT
-                        book_id,
-                        COUNT(DISTINCT extract_id) AS chapters_completed,
-                        COALESCE(AVG(accuracy), 0)::float8 AS avg_accuracy,
-                        COALESCE(AVG(duration_sec), 0)::float8 AS avg_duration_sec
-                    FROM base
-                    GROUP BY book_id
+                      AND book_id = %s
                 ),
                 most_played AS (
-                    SELECT DISTINCT ON (book_id)
-                        book_id,
-                        puzzle_type AS most_played_puzzle_type
-                    FROM (
-                        SELECT
-                            book_id,
-                            puzzle_type,
-                            COUNT(*) AS cnt
-                        FROM base
-                        GROUP BY book_id, puzzle_type
-                        ORDER BY book_id, cnt DESC, puzzle_type ASC
-                    ) x
-                    ORDER BY book_id, cnt DESC, puzzle_type ASC
+                    SELECT puzzle_type
+                    FROM base
+                    GROUP BY puzzle_type
+                    ORDER BY COUNT(*) DESC, puzzle_type ASC
+                    LIMIT 1
                 )
                 SELECT
-                    a.book_id,
-                    a.chapters_completed,
-                    a.avg_accuracy,
-                    a.avg_duration_sec,
-                    m.most_played_puzzle_type
-                FROM agg a
-                LEFT JOIN most_played m USING (book_id)
-                ORDER BY a.book_id
+                    %s::bigint AS book_id,
+                    COALESCE(COUNT(DISTINCT extract_id), 0) AS chapters_completed,
+                    COALESCE(AVG(accuracy), 0)::float8 AS avg_accuracy,
+                    COALESCE(AVG(duration_sec), 0)::float8 AS avg_duration_sec,
+                    (SELECT puzzle_type FROM most_played) AS most_played_puzzle_type
+                FROM base
                 """,
-                (x_session_id,),
+                (x_session_id, book_id, book_id),
             )
-            rows = cur.fetchall()
+
+            row = cur.fetchone()
 
     return {
-        "books": [
-            {
-                "book_id": int(r[0]),
-                "chapters_completed": int(r[1]),
-                "avg_accuracy": float(r[2]),
-                "avg_duration_sec": float(r[3]),
-                "most_played_puzzle_type": r[4],
-            }
-            for r in rows
-        ]
+        "book_id": int(row[0]),
+        "chapters_completed": int(row[1]),
+        "avg_accuracy": float(row[2]),
+        "avg_duration_sec": float(row[3]),
+        "most_played_puzzle_type": row[4],
     }
